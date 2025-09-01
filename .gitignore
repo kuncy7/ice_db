@@ -1,0 +1,17 @@
+# Wirtualne środowisko
+venv/
+.venv/
+
+# Plik z sekretami - NIGDY nie dodawaj go do repozytorium!
+.env
+
+# Pliki cache i skompilowane Pythona
+__pycache__/
+*.pyc
+
+# Pliki generowane przez edytory
+.vscode/
+.idea/
+
+# Pliki systemowe
+.DS_Store
