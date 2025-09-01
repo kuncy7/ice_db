@@ -2,4 +2,4 @@
 from ..database import Base
 
 # Importuj wszystkie swoje modele, aby były dostępne w jednym miejscu
-from .models import Organization, User, UserSession
+from .models import Organization, User, UserSession, IceRink, Measurement
