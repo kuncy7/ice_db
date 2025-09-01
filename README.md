@@ -96,7 +96,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 Aplikacja będzie dostępna pod adresem `http://localhost:8000` (lub adresem IP Twojego serwera).
 
-## 5. Wdrożenie jako Usługa Systemowa
+### 5. Wdrożenie jako Usługa Systemowa
 
 Aplikacja jest przygotowana do uruchomienia jako stała usługa systemowa `systemd` w środowisku produkcyjnym. Taki sposób wdrożenia zapewnia automatyczny start aplikacji po restarcie serwera oraz jej automatyczne ponowne uruchomienie w przypadku awarii.
 
