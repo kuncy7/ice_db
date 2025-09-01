@@ -1,0 +1,23 @@
+[Unit]
+Description=Lodowisko API Service
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+# =================================================================
+# UWAGA: Uzupełnij poniższe ścieżki i nazwy użytkownika
+# Zastąp <USER> swoją nazwą użytkownika (np. ice)
+# Zastąp <PROJECT_PATH> pełną ścieżką do katalogu aplikacji
+# (np. /home/ice/git/lodowisko-api)
+# =================================================================
+User=<USER>
+Group=<USER>
+WorkingDirectory=<PROJECT_PATH>
+EnvironmentFile=<PROJECT_PATH>/.env
+ExecStart=<PROJECT_PATH>/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
