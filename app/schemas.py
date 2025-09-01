@@ -1,7 +1,21 @@
 from pydantic import BaseModel, UUID4, EmailStr
-from typing import Optional, List, Any
+from typing import Optional, List, Any, TypeVar, Generic
 from datetime import datetime
 from decimal import Decimal
+
+# --- Generyczne Schematy Paginacji ---
+
+T = TypeVar('T')
+
+class PaginationInfo(BaseModel):
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    data: List[T]
+    pagination: PaginationInfo
 
 # --- Schematy dla Organization ---
 

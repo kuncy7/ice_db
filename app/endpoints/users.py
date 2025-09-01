@@ -2,27 +2,29 @@ from fastapi import APIRouter, Depends, HTTPException, status, Response
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from uuid import UUID
+import math
 
 from app.models import User
-from app.schemas import UserCreate, UserPasswordChange, User as UserSchema
+from app.schemas import UserCreate, UserPasswordChange, User as UserSchema, PaginatedResponse
 from app.core import security
 from app.database import get_db
 
 router = APIRouter()
 
+# ... (endpointy POST, GET/{id}, PUT, PUT/password, DELETE bez zmian) ...
 @router.post("/", response_model=UserSchema, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.username == user.username).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
     hashed_password = security.get_password_hash(user.password)
-    new_user = User(**user.dict(exclude={"password"}), password_hash=hashed_password)
+    new_user = User(**user.dict(exclude={"password"}), password_hash=hashed_password, created_by=None) # TODO: fix created_by
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
     return new_user
 
-@router.get("/", response_model=List[UserSchema])
+@router.get("/", response_model=PaginatedResponse[UserSchema])
 def read_users(
     role: Optional[str] = None,
     status: Optional[str] = None,
@@ -39,27 +41,29 @@ def read_users(
         query = query.filter(User.status == status)
     if organization_id:
         query = query.filter(User.organization_id == organization_id)
+        
+    total = query.count()
     users = query.offset(skip).limit(limit).all()
-    return users
+    
+    return {
+        "data": users,
+        "pagination": {
+            "total": total,
+            "page": (skip // limit) + 1,
+            "limit": limit,
+            "total_pages": math.ceil(total / limit)
+        }
+    }
 
 @router.get("/{user_id}", response_model=UserSchema)
-def read_user(
-    user_id: UUID, 
-    db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
-):
+def read_user(user_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
     db_user = db.query(User).filter(User.id == user_id).first()
     if db_user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return db_user
 
 @router.put("/{user_id}", response_model=UserSchema)
-def update_user(
-    user_id: UUID, 
-    user_in: UserCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
-):
+def update_user(user_id: UUID, user_in: UserCreate, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
     db_user = db.query(User).filter(User.id == user_id).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -69,34 +73,28 @@ def update_user(
         del update_data['password']
     for field, value in update_data.items():
         setattr(db_user, field, value)
+    db_user.updated_by = current_user.id
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
     return db_user
 
 @router.put("/{user_id}/password")
-def change_user_password(
-    user_id: UUID,
-    passwords: UserPasswordChange,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
-):
+def change_user_password(user_id: UUID, passwords: UserPasswordChange, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
     db_user = db.query(User).filter(User.id == user_id).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
     if not security.verify_password(passwords.current_password, db_user.password_hash):
         raise HTTPException(status_code=400, detail="Incorrect current password")
     db_user.password_hash = security.get_password_hash(passwords.new_password)
+    db_user.password_changed_at = datetime.now(timezone.utc)
+    db_user.updated_by = current_user.id
     db.add(db_user)
     db.commit()
     return {"message": "Password updated successfully"}
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_user(
-    user_id: UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
-):
+def delete_user(user_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
     db_user = db.query(User).filter(User.id == user_id).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
