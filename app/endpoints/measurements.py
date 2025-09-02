@@ -1,102 +1,175 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session
-from sqlalchemy import desc
-from typing import List, Optional
 from uuid import UUID
-from datetime import datetime
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 import io
 import csv
-from starlette.responses import StreamingResponse
-import math
 
-from app.models import User, IceRink, Measurement
-from app.schemas import MeasurementCreate, Measurement as MeasurementSchema, PaginatedResponse
-from app.core import security
 from app.database import get_db
+from app.models import Measurement, IceRink, User
+from app.schemas import MeasurementCreate, Measurement as MeasurementSchema
+from app.core.security import get_current_user, require_roles
+from app.utils.responses import success_envelope
 
 router = APIRouter()
 
-# ... (endpoint POST bez zmian) ...
-@router.post("/{ice_rink_id}/measurements", response_model=MeasurementSchema, status_code=status.HTTP_201_CREATED)
-def create_measurement_for_rink(ice_rink_id: UUID, measurement_in: MeasurementCreate, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_ice_rink = db.query(IceRink).filter(IceRink.id == ice_rink_id).first()
-    if not db_ice_rink:
+# --- helpers -----------------------------------------------------------------
+
+def _get_rink_or_404(db: Session, rink_id: UUID) -> IceRink:
+    rink = db.query(IceRink).filter(IceRink.id == rink_id).first()
+    if not rink:
         raise HTTPException(status_code=404, detail="Ice rink not found")
-    new_measurement = Measurement(**measurement_in.dict(), ice_rink_id=ice_rink_id)
-    db.add(new_measurement)
-    db.commit()
-    db.refresh(new_measurement)
-    return new_measurement
+    return rink
 
-@router.get("/{ice_rink_id}/measurements", response_model=PaginatedResponse[MeasurementSchema])
-def read_measurements(
+def _to_schema(m: Measurement) -> MeasurementSchema:
+    return MeasurementSchema.model_validate(m, from_attributes=True)
+
+# --- endpoints ---------------------------------------------------------------
+
+@router.post(
+    "/{ice_rink_id}/measurements",
+    dependencies=[Depends(require_roles("admin", "operator"))],
+)
+def create_measurement(
     ice_rink_id: UUID,
-    start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None,
-    data_source: Optional[str] = None,
-    skip: int = 0,
-    limit: int = 100,
+    payload: MeasurementCreate,
+    response: Response,
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Measurement).filter(Measurement.ice_rink_id == ice_rink_id)
-    
-    if start_date:
-        query = query.filter(Measurement.timestamp >= start_date)
-    if end_date:
-        query = query.filter(Measurement.timestamp <= end_date)
-    if data_source:
-        query = query.filter(Measurement.data_source == data_source)
-        
-    total = query.count()
-    measurements = query.order_by(desc(Measurement.timestamp)).offset(skip).limit(limit).all()
+    """
+    Idempotentne utworzenie/aktualizacja pomiaru:
+    - jeśli istnieje Measurement dla (ice_rink_id, timestamp) -> UPDATE i 200 OK
+    - w przeciwnym razie -> INSERT i 201 Created
+    """
+    _get_rink_or_404(db, ice_rink_id)
 
-    return {
-        "data": measurements,
-        "pagination": {
-            "total": total,
-            "page": (skip // limit) + 1,
-            "limit": limit,
-            "total_pages": math.ceil(total / limit)
-        }
-    }
+    if payload.timestamp is None:
+        raise HTTPException(status_code=400, detail="timestamp is required")
 
-@router.get("/{ice_rink_id}/measurements/latest", response_model=MeasurementSchema)
-def read_latest_measurement(ice_rink_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    latest_measurement = db.query(Measurement).filter(Measurement.ice_rink_id == ice_rink_id).order_by(desc(Measurement.timestamp)).first()
-    if not latest_measurement:
-        raise HTTPException(status_code=404, detail="No measurements found for this ice rink")
-    return latest_measurement
+    # Sprawdź, czy już istnieje rekord o tym samym kluczu unikalnym
+    existing = (
+        db.query(Measurement)
+        .filter(
+            Measurement.ice_rink_id == ice_rink_id,
+            Measurement.timestamp == payload.timestamp,
+        )
+        .first()
+    )
 
-@router.get("/{ice_rink_id}/measurements/export")
+    if existing:
+        # aktualizacja pól (upsert – część update)
+        existing.ice_temperature   = payload.ice_temperature
+        existing.chiller_power     = payload.chiller_power
+        existing.chiller_status    = payload.chiller_status
+        existing.ambient_temperature = payload.ambient_temperature
+        existing.humidity          = payload.humidity
+        existing.energy_consumption = payload.energy_consumption
+        existing.data_source       = payload.data_source
+        existing.quality_score     = payload.quality_score
+
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        response.status_code = status.HTTP_200_OK
+        return success_envelope(_to_schema(existing))
+
+    # wstawienie nowego (upsert – część insert)
+    m = Measurement(
+        ice_rink_id=ice_rink_id,
+        timestamp=payload.timestamp,
+        ice_temperature=payload.ice_temperature,
+        chiller_power=payload.chiller_power,
+        chiller_status=payload.chiller_status,
+        ambient_temperature=payload.ambient_temperature,
+        humidity=payload.humidity,
+        energy_consumption=payload.energy_consumption,
+        data_source=payload.data_source,
+        quality_score=payload.quality_score,
+    )
+    db.add(m)
+    db.commit()
+    db.refresh(m)
+    response.status_code = status.HTTP_201_CREATED
+    return success_envelope(_to_schema(m))
+
+
+@router.get(
+    "/{ice_rink_id}/measurements/latest",
+    dependencies=[Depends(get_current_user)],
+)
+def get_latest_measurement(
+    ice_rink_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """
+    Zwraca ostatni pomiar dla lodowiska.
+    """
+    _get_rink_or_404(db, ice_rink_id)
+
+    m = (
+        db.query(Measurement)
+        .filter(Measurement.ice_rink_id == ice_rink_id)
+        .order_by(Measurement.timestamp.desc())
+        .first()
+    )
+    if not m:
+        raise HTTPException(status_code=404, detail="No measurements found")
+    return success_envelope(_to_schema(m))
+
+
+@router.get(
+    "/{ice_rink_id}/measurements/export",
+    dependencies=[Depends(get_current_user)],
+)
 def export_measurements(
     ice_rink_id: UUID,
-    start_date: datetime,
-    end_date: datetime,
-    format: str = Query("csv", enum=["csv", "json"]),
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    sort: str = Query("desc", pattern="^(asc|desc)$"),
+    format: str = Query("csv", pattern="^(csv)$"),
 ):
-    # ... (logika eksportu bez zmian) ...
-    query = db.query(Measurement).filter(Measurement.ice_rink_id == ice_rink_id)
-    query = query.filter(Measurement.timestamp >= start_date)
-    query = query.filter(Measurement.timestamp <= end_date)
-    measurements = query.order_by(Measurement.timestamp).all()
-    if not measurements:
-        raise HTTPException(status_code=404, detail="No measurements found for the given time range")
+    """
+    Eksport pomiarów do CSV.
+    """
+    _get_rink_or_404(db, ice_rink_id)
 
-    if format == "json":
-        output = [MeasurementSchema.from_orm(m).dict(by_alias=True) for m in measurements]
-        return output
+    q = db.query(Measurement).filter(Measurement.ice_rink_id == ice_rink_id)
+    if sort == "asc":
+        q = q.order_by(Measurement.timestamp.asc())
+    else:
+        q = q.order_by(Measurement.timestamp.desc())
+    rows: List[Measurement] = q.all()
 
-    if format == "csv":
-        stream = io.StringIO()
-        writer = csv.writer(stream)
-        headers = MeasurementSchema.model_fields.keys()
-        writer.writerow(headers)
-        for measurement in measurements:
-            row_data = MeasurementSchema.from_orm(measurement).dict()
-            writer.writerow([row_data[header] for header in headers])
-        response = StreamingResponse(iter([stream.getvalue()]), media_type="text/csv")
-        response.headers["Content-Disposition"] = f"attachment; filename=measurements_{ice_rink_id}_{start_date.date()}_{end_date.date()}.csv"
-        return response
+    # tylko CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "timestamp",
+        "ice_temperature",
+        "chiller_power",
+        "chiller_status",
+        "ambient_temperature",
+        "humidity",
+        "energy_consumption",
+        "data_source",
+        "quality_score",
+    ])
+    for m in rows:
+        writer.writerow([
+            m.timestamp.isoformat() if m.timestamp else None,
+            m.ice_temperature,
+            m.chiller_power,
+            m.chiller_status,
+            m.ambient_temperature,
+            m.humidity,
+            m.energy_consumption,
+            m.data_source,
+            m.quality_score,
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=measurements.csv"},
+    )

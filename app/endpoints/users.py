@@ -1,103 +1,139 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Response
-from sqlalchemy.orm import Session
-from typing import List, Optional
 from uuid import UUID
-import math
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
 
-from app.models import User
-from app.schemas import UserCreate, UserPasswordChange, User as UserSchema, PaginatedResponse
-from app.core import security
 from app.database import get_db
+from app.models import User, Organization
+from app.schemas import UserCreate, UserUpdate, User as UserSchema
+from app.core.security import get_current_user, require_roles, get_password_hash
+from app.utils.responses import success_envelope
 
 router = APIRouter()
 
-# ... (endpointy POST, GET/{id}, PUT, PUT/password, DELETE bez zmian) ...
-@router.post("/", response_model=UserSchema, status_code=status.HTTP_201_CREATED)
-def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.username == user.username).first()
-    if db_user:
-        raise HTTPException(status_code=400, detail="Username already registered")
-    hashed_password = security.get_password_hash(user.password)
-    new_user = User(**user.dict(exclude={"password"}), password_hash=hashed_password, created_by=None) # TODO: fix created_by
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    return new_user
+_ALLOWED_ROLES = {"admin", "operator", "viewer"}
 
-@router.get("/", response_model=PaginatedResponse[UserSchema])
-def read_users(
-    role: Optional[str] = None,
-    status: Optional[str] = None,
-    organization_id: Optional[UUID] = None,
-    skip: int = 0, 
-    limit: int = 100, 
+
+def _to_user_schema(u: User) -> UserSchema:
+    return UserSchema.model_validate(u, from_attributes=True)
+
+
+@router.get("/", dependencies=[Depends(require_roles("admin"))])
+def list_users(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    query = db.query(User)
-    if role:
-        query = query.filter(User.role == role)
-    if status:
-        query = query.filter(User.status == status)
-    if organization_id:
-        query = query.filter(User.organization_id == organization_id)
-        
-    total = query.count()
-    users = query.offset(skip).limit(limit).all()
-    
-    return {
-        "data": users,
-        "pagination": {
-            "total": total,
-            "page": (skip // limit) + 1,
-            "limit": limit,
-            "total_pages": math.ceil(total / limit)
-        }
+    q = db.query(User)
+    total = q.count()
+    items = q.offset((page - 1) * limit).limit(limit).all()
+
+    data = {
+        "items": [_to_user_schema(u) for u in items],
+        "page": page,
+        "limit": limit,
+        "total": total,
     }
+    return success_envelope(data)
 
-@router.get("/{user_id}", response_model=UserSchema)
-def read_user(user_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_user = db.query(User).filter(User.id == user_id).first()
-    if db_user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-    return db_user
 
-@router.put("/{user_id}", response_model=UserSchema)
-def update_user(user_id: UUID, user_in: UserCreate, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_user = db.query(User).filter(User.id == user_id).first()
-    if not db_user:
+@router.get("/{user_id}", dependencies=[Depends(require_roles("admin"))])
+def get_user(
+    user_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
         raise HTTPException(status_code=404, detail="User not found")
-    update_data = user_in.dict(exclude_unset=True)
-    if 'password' in update_data and update_data['password']:
-        db_user.password_hash = security.get_password_hash(update_data['password'])
-        del update_data['password']
-    for field, value in update_data.items():
-        setattr(db_user, field, value)
-    db_user.updated_by = current_user.id
-    db.add(db_user)
+    return success_envelope(_to_user_schema(u))
+
+
+@router.post("/", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_roles("admin"))])
+def create_user(
+    payload: UserCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # Walidacja organization_id (w DB jest NOT NULL)
+    if not payload.organization_id:
+        raise HTTPException(status_code=400, detail="organization_id is required")
+
+    org = db.query(Organization).filter(Organization.id == payload.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=400, detail="organization_id is invalid")
+
+    # Walidacja roli
+    if payload.role and payload.role not in _ALLOWED_ROLES:
+        raise HTTPException(status_code=400, detail="role is invalid")
+
+    # Hash hasła
+    password_hash = get_password_hash(payload.password)
+
+    u = User(
+        organization_id=payload.organization_id,
+        username=payload.username,
+        email=payload.email,
+        password_hash=password_hash,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        role=payload.role,
+        status="active" if payload.is_active else "inactive",
+        created_by=current_user.id if current_user else None,
+    )
+
+    db.add(u)
     db.commit()
-    db.refresh(db_user)
-    return db_user
+    db.refresh(u)
+    return success_envelope(_to_user_schema(u))
 
-@router.put("/{user_id}/password")
-def change_user_password(user_id: UUID, passwords: UserPasswordChange, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_user = db.query(User).filter(User.id == user_id).first()
-    if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if not security.verify_password(passwords.current_password, db_user.password_hash):
-        raise HTTPException(status_code=400, detail="Incorrect current password")
-    db_user.password_hash = security.get_password_hash(passwords.new_password)
-    db_user.password_changed_at = datetime.now(timezone.utc)
-    db_user.updated_by = current_user.id
-    db.add(db_user)
-    db.commit()
-    return {"message": "Password updated successfully"}
 
-@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_user(user_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_user = db.query(User).filter(User.id == user_id).first()
-    if not db_user:
+@router.put("/{user_id}", dependencies=[Depends(require_roles("admin"))])
+def update_user(
+    user_id: UUID,
+    payload: UserUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
         raise HTTPException(status_code=404, detail="User not found")
-    db.delete(db_user)
+
+    upd = payload.model_dump(exclude_unset=True)
+
+    if "organization_id" in upd:
+        if upd["organization_id"] is None:
+            raise HTTPException(status_code=400, detail="organization_id cannot be null")
+        org = db.query(Organization).filter(Organization.id == upd["organization_id"]).first()
+        if not org:
+            raise HTTPException(status_code=400, detail="organization_id is invalid")
+
+    if "role" in upd:
+        if upd["role"] not in _ALLOWED_ROLES:
+            raise HTTPException(status_code=400, detail="role is invalid")
+
+    if "password" in upd and upd["password"]:
+        u.password_hash = get_password_hash(upd.pop("password"))
+
+    for k, v in upd.items():
+        setattr(u, k, v)
+
+    db.add(u)
     db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    db.refresh(u)
+    return success_envelope(_to_user_schema(u))
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_roles("admin"))])
+def delete_user(
+    user_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    db.delete(u)
+    db.commit()
+    # 204 — brak body

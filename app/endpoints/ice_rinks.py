@@ -1,93 +1,117 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Response
-from sqlalchemy.orm import Session
-from typing import List, Optional
 from uuid import UUID
-from datetime import datetime, timezone
-import math
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
 
-from app.models import User, IceRink
-from app.schemas import IceRinkCreate, IceRinkUpdate, IceRink as IceRinkSchema, PaginatedResponse
-from app.core import security
 from app.database import get_db
+from app.models import IceRink, Organization, User
+from app.schemas import IceRinkCreate, IceRinkUpdate, IceRink as IceRinkSchema
+from app.core.security import get_current_user, require_roles
+from app.utils.responses import success_envelope
 
 router = APIRouter()
 
-# ... (endpointy POST, GET/{id}, PUT, POST/test-connection, DELETE bez zmian) ...
-@router.post("/", response_model=IceRinkSchema, status_code=status.HTTP_201_CREATED)
-def create_ice_rink(ice_rink_in: IceRinkCreate, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    new_ice_rink = IceRink(**ice_rink_in.dict(), created_by=current_user.id)
-    db.add(new_ice_rink)
-    db.commit()
-    db.refresh(new_ice_rink)
-    return new_ice_rink
 
-@router.get("/", response_model=PaginatedResponse[IceRinkSchema])
-def read_ice_rinks(
-    organization_id: Optional[UUID] = None,
-    status: Optional[str] = None,
-    ssp_status: Optional[str] = None,
-    location: Optional[str] = None,
-    skip: int = 0,
-    limit: int = 100,
+def _to_rink_schema(r: IceRink) -> IceRinkSchema:
+    return IceRinkSchema.model_validate(r, from_attributes=True)
+
+
+@router.get("/")
+def list_ice_rinks(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    query = db.query(IceRink)
-    if organization_id:
-        query = query.filter(IceRink.organization_id == organization_id)
-    if status:
-        query = query.filter(IceRink.status == status)
-    if ssp_status:
-        query = query.filter(IceRink.ssp_status == ssp_status)
-    if location:
-        query = query.filter(IceRink.location.ilike(f"%{location}%"))
-        
-    total = query.count()
-    ice_rinks = query.offset(skip).limit(limit).all()
-    
-    return {
-        "data": ice_rinks,
-        "pagination": {
-            "total": total,
-            "page": (skip // limit) + 1,
-            "limit": limit,
-            "total_pages": math.ceil(total / limit)
-        }
+    q = db.query(IceRink)
+    total = q.count()
+    items = q.offset((page - 1) * limit).limit(limit).all()
+
+    data = {
+        "items": [_to_rink_schema(r) for r in items],
+        "page": page,
+        "limit": limit,
+        "total": total,
     }
+    return success_envelope(data)
 
-@router.get("/{ice_rink_id}", response_model=IceRinkSchema)
-def read_ice_rink(ice_rink_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_ice_rink = db.query(IceRink).filter(IceRink.id == ice_rink_id).first()
-    if db_ice_rink is None:
-        raise HTTPException(status_code=404, detail="Ice rink not found")
-    return db_ice_rink
 
-@router.put("/{ice_rink_id}", response_model=IceRinkSchema)
-def update_ice_rink(ice_rink_id: UUID, ice_rink_in: IceRinkUpdate, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_ice_rink = db.query(IceRink).filter(IceRink.id == ice_rink_id).first()
-    if not db_ice_rink:
+@router.get("/{ice_rink_id}")
+def get_ice_rink(
+    ice_rink_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    r = db.query(IceRink).filter(IceRink.id == ice_rink_id).first()
+    if not r:
         raise HTTPException(status_code=404, detail="Ice rink not found")
-    update_data = ice_rink_in.dict(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(db_ice_rink, field, value)
-    db_ice_rink.updated_by = current_user.id
-    db.add(db_ice_rink)
+    return success_envelope(_to_rink_schema(r))
+
+
+@router.post(
+    "/",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_roles("admin", "operator"))],
+)
+def create_ice_rink(
+    payload: IceRinkCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if payload.organization_id:
+        org = db.query(Organization).filter(Organization.id == payload.organization_id).first()
+        if not org:
+            raise HTTPException(status_code=400, detail="organization_id is invalid")
+
+    r = IceRink(**payload.model_dump(exclude_unset=True))
+    db.add(r)
     db.commit()
-    db.refresh(db_ice_rink)
-    return db_ice_rink
+    db.refresh(r)
+    return success_envelope(_to_rink_schema(r))
 
-@router.post("/{ice_rink_id}/test-connection")
-def test_ssp_connection(ice_rink_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_ice_rink = db.query(IceRink).filter(IceRink.id == ice_rink_id).first()
-    if not db_ice_rink:
-        raise HTTPException(status_code=404, detail="Ice rink not found")
-    return { "success": True, "data": { "status": "connected", "response_time": 150.5, "last_communication": datetime.now(timezone.utc), "error_message": None } }
 
-@router.delete("/{ice_rink_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_ice_rink(ice_rink_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_ice_rink = db.query(IceRink).filter(IceRink.id == ice_rink_id).first()
-    if not db_ice_rink:
+@router.put(
+    "/{ice_rink_id}",
+    dependencies=[Depends(require_roles("admin", "operator"))],
+)
+def update_ice_rink(
+    ice_rink_id: UUID,
+    payload: IceRinkUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    r = db.query(IceRink).filter(IceRink.id == ice_rink_id).first()
+    if not r:
         raise HTTPException(status_code=404, detail="Ice rink not found")
-    db.delete(db_ice_rink)
+
+    upd = payload.model_dump(exclude_unset=True)
+    if "organization_id" in upd and upd["organization_id"]:
+        org = db.query(Organization).filter(Organization.id == upd["organization_id"]).first()
+        if not org:
+            raise HTTPException(status_code=400, detail="organization_id is invalid")
+
+    for k, v in upd.items():
+        setattr(r, k, v)
+
+    db.add(r)
     db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    db.refresh(r)
+    return success_envelope(_to_rink_schema(r))
+
+
+@router.delete(
+    "/{ice_rink_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_roles("admin", "operator"))],
+)
+def delete_ice_rink(
+    ice_rink_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    r = db.query(IceRink).filter(IceRink.id == ice_rink_id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Ice rink not found")
+
+    db.delete(r)
+    db.commit()
+    # 204 — brak body

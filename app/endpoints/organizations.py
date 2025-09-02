@@ -1,82 +1,105 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy.orm import Session
-from typing import List, Optional
 from uuid import UUID
-import math
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
 
-from app.models import User, Organization
-from app.schemas import OrganizationCreate, OrganizationUpdate, Organization as OrganizationSchema, PaginatedResponse
 from app.database import get_db
-from app.core import security
+from app.models import Organization, User
+from app.schemas import OrganizationCreate, OrganizationUpdate, Organization as OrganizationSchema
+from app.core.security import get_current_user, require_roles
+from app.utils.responses import success_envelope
 
 router = APIRouter()
 
-# ... (endpointy POST, GET/{id}, PUT, DELETE bez zmian) ...
-@router.post("/", response_model=OrganizationSchema, status_code=status.HTTP_201_CREATED)
-def create_organization(org: OrganizationCreate, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_org = db.query(Organization).filter(Organization.name == org.name).first()
-    if db_org:
-        raise HTTPException(status_code=400, detail="Organization with this name already exists")
-    new_org = Organization(**org.dict(), created_by=current_user.id)
-    db.add(new_org)
-    db.commit()
-    db.refresh(new_org)
-    return new_org
 
-@router.get("/", response_model=PaginatedResponse[OrganizationSchema])
-def read_organizations(
-    status: Optional[str] = None,
-    type: Optional[str] = None,
-    skip: int = 0, 
-    limit: int = 100, 
+def _to_org_schema(o: Organization) -> OrganizationSchema:
+    return OrganizationSchema.model_validate(o, from_attributes=True)
+
+
+@router.get("/")
+def list_organizations(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
-    current_user: User = Depends(security.get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Organization)
-    if status:
-        query = query.filter(Organization.status == status)
-    if type:
-        query = query.filter(Organization.type == type)
-    
-    total = query.count()
-    orgs = query.offset(skip).limit(limit).all()
-    
-    return {
-        "data": orgs,
-        "pagination": {
-            "total": total,
-            "page": (skip // limit) + 1,
-            "limit": limit,
-            "total_pages": math.ceil(total / limit)
-        }
+    q = db.query(Organization)
+    total = q.count()
+    items = q.offset((page - 1) * limit).limit(limit).all()
+
+    data = {
+        "items": [_to_org_schema(o) for o in items],
+        "page": page,
+        "limit": limit,
+        "total": total,
     }
+    return success_envelope(data)
 
-@router.get("/{organization_id}", response_model=OrganizationSchema)
-def read_organization(organization_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_org = db.query(Organization).filter(Organization.id == organization_id).first()
-    if db_org is None:
-        raise HTTPException(status_code=404, detail="Organization not found")
-    return db_org
 
-@router.put("/{organization_id}", response_model=OrganizationSchema)
-def update_organization(organization_id: UUID, org_in: OrganizationUpdate, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_org = db.query(Organization).filter(Organization.id == organization_id).first()
-    if not db_org:
+@router.get("/{organization_id}")
+def get_organization(
+    organization_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    o = db.query(Organization).filter(Organization.id == organization_id).first()
+    if not o:
         raise HTTPException(status_code=404, detail="Organization not found")
-    update_data = org_in.dict(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(db_org, field, value)
-    db_org.updated_by = current_user.id
-    db.add(db_org)
+    return success_envelope(_to_org_schema(o))
+
+
+@router.post(
+    "/",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_roles("admin"))],
+)
+def create_organization(
+    payload: OrganizationCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    o = Organization(**payload.model_dump(exclude_unset=True))
+    db.add(o)
     db.commit()
-    db.refresh(db_org)
-    return db_org
+    db.refresh(o)
+    return success_envelope(_to_org_schema(o))
 
-@router.delete("/{organization_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_organization(organization_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(security.get_current_user)):
-    db_org = db.query(Organization).filter(Organization.id == organization_id).first()
-    if not db_org:
+
+@router.put(
+    "/{organization_id}",
+    dependencies=[Depends(require_roles("admin"))],
+)
+def update_organization(
+    organization_id: UUID,
+    payload: OrganizationUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    o = db.query(Organization).filter(Organization.id == organization_id).first()
+    if not o:
         raise HTTPException(status_code=404, detail="Organization not found")
-    db.delete(db_org)
+
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(o, k, v)
+
+    db.add(o)
     db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    db.refresh(o)
+    return success_envelope(_to_org_schema(o))
+
+
+@router.delete(
+    "/{organization_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_roles("admin"))],
+)
+def delete_organization(
+    organization_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    o = db.query(Organization).filter(Organization.id == organization_id).first()
+    if not o:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    db.delete(o)
+    db.commit()
+    # 204 — brak body
