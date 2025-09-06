@@ -80,7 +80,8 @@ class UserUpdate(BaseModel):
     status: Optional[Literal['active', 'inactive', 'locked']] = None
 
 class PasswordUpdate(BaseModel):
-    password: str = Field(..., min_length=8)
+    current_password: Optional[str] = None
+    new_password: str = Field(..., min_length=8)
 
 class UserResponse(UserBase, OrmBase):
     id: uuid.UUID

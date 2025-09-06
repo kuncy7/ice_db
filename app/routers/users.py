@@ -1,8 +1,10 @@
 import uuid
-from fastapi import APIRouter, Depends, HTTPException
-from app.deps import require_role, get_user_repo
+from fastapi import APIRouter, Depends, HTTPException, status
+from app.deps import require_role, get_user_repo, get_current_user_payload
 from app.repositories.user import UserRepository
-from app.schemas import UserCreate, UserResponse, UserUpdate, PasswordUpdate
+from app.schemas import (UserCreate, UserResponse, UserUpdate,
+                         PasswordUpdate)
+from app.security import verify_password
 from app.utils import paginate
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -17,7 +19,8 @@ async def list_users(
     offset = (page - 1) * limit
     filters = {}
     if user_payload.get("role") == "client":
-        filters["organization_id"] = user_payload.get("organization_id")
+        # Konwersja stringa z tokena na UUID dla repozytorium
+        filters["organization_id"] = uuid.UUID(user_payload.get("organization_id"))
 
     users, total = await repo.get_paginated_list(skip=offset, limit=limit, filters=filters)
     
@@ -63,14 +66,40 @@ async def update_user(
         raise HTTPException(status_code=404, detail="User not found")
     return updated_user
 
-@router.put("/{user_id}/password")
-async def update_user_password(
+@router.put("/{user_id}/password", status_code=status.HTTP_204_NO_CONTENT)
+async def update_password(
     user_id: uuid.UUID,
-    payload: PasswordUpdate,
+    payload: PasswordUpdate, # <-- POPRAWKA: Używamy teraz konkretnego schematu
     repo: UserRepository = Depends(get_user_repo),
-    _=Depends(require_role("admin"))
+    current_user_payload: dict = Depends(get_current_user_payload)
 ):
-    success = await repo.update_password(user_id, payload.password)
-    if not success:
+    """
+    Updates a user's password.
+    - Admins can change any password providing only 'new_password'.
+    - Regular users can change their own password providing 'current_password' and 'new_password'.
+    """
+    current_user_id = uuid.UUID(current_user_payload.get("sub"))
+    current_user_role = current_user_payload.get("role")
+
+    target_user = await repo.get_by_id(user_id)
+    if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"success": True, "message": "Password updated successfully."}
+
+    # Przypadek 1: Administrator zmienia hasło
+    if current_user_role == 'admin':
+        await repo.update_password(user_id, payload.new_password)
+        return
+
+    # Przypadek 2: Użytkownik zmienia własne hasło
+    if current_user_id == user_id:
+        if not payload.current_password:
+            raise HTTPException(status_code=422, detail="Field 'current_password' is required for non-admin users.")
+        
+        if not verify_password(payload.current_password, target_user.password_hash):
+            raise HTTPException(status_code=400, detail="Incorrect current password.")
+        
+        await repo.update_password(user_id, payload.new_password)
+        return
+
+    # Przypadek 3: Brak uprawnień
+    raise HTTPException(status_code=403, detail="Not enough permissions to change this user's password.")
