@@ -9,7 +9,7 @@ from openpyxl import Workbook
 from app.deps import require_role, get_measurement_repo, get_rink_repo
 from app.repositories.measurement import MeasurementRepository
 from app.repositories.ice_rink import IceRinkRepository
-from app.schemas import MeasurementResponse, PaginatedResponse
+from app.schemas import MeasurementResponse
 
 router = APIRouter(prefix="/api/ice-rinks/{rink_id}/measurements", tags=["measurements"])
 
