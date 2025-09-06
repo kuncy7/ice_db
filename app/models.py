@@ -154,3 +154,18 @@ class TicketComment(Base):
 
     ticket = relationship("ServiceTicket", back_populates="comments")
     user = relationship("User")
+
+class SystemConfig(Base):
+    __tablename__ = "system_config"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    key = Column(String(255), nullable=False, unique=True, index=True)
+    value = Column(Text, nullable=False)
+    description = Column(Text)
+    category = Column(String(100), nullable=False, index=True)
+    is_encrypted = Column(Boolean, nullable=False, default=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_by_id = Column("updated_by", UUID(as_uuid=True), ForeignKey('users.id'))
+
+    # Relacja do użytkownika, który ostatnio modyfikował wpis
+    updated_by = relationship("User", foreign_keys=[updated_by_id])

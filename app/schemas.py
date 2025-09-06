@@ -265,3 +265,17 @@ class TokenData(BaseModel):
 class TokenResponse(BaseModel):
     success: bool = True
     data: TokenData
+
+# =================
+#  System Configuration
+# =================
+class SystemConfigUpdate(BaseModel):
+    value: str
+
+class SystemConfigResponse(OrmBase):
+    key: str
+    value: str
+    description: Optional[str] = None
+    category: str
+    updated_at: datetime
+    updated_by_id: Optional[uuid.UUID] = None

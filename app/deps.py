@@ -12,6 +12,7 @@ from app.repositories.measurement import MeasurementRepository
 from app.repositories.service_ticket import ServiceTicketRepository
 from app.repositories.weather_provider import WeatherProviderRepository
 from app.repositories.weather_forecast import WeatherForecastRepository
+from app.repositories.system_config import SystemConfigRepository
 
 # Zależność dostarczająca sesję bazodanową
 async def get_db_session() -> AsyncSession:
@@ -39,6 +40,9 @@ def get_weather_provider_repo(session: AsyncSession = Depends(get_db_session)) -
 
 def get_weather_forecast_repo(session: AsyncSession = Depends(get_db_session)) -> WeatherForecastRepository:
     return WeatherForecastRepository(session)
+
+def get_system_config_repo(session: AsyncSession = Depends(get_db_session)) -> SystemConfigRepository:
+    return SystemConfigRepository(session)
 
 # Zależności autoryzacji (reszta pliku)
 async def get_bearer_token(authorization: Optional[str] = Header(None)) -> str:
