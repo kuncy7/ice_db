@@ -228,6 +228,13 @@ class ServiceTicketResponse(ServiceTicketBase, OrmBase):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
+class ServiceTicketStatusUpdate(BaseModel):
+    status: Literal['new', 'assigned', 'in_progress', 'resolved', 'closed']
+    comment: Optional[str] = None
+
+class ServiceTicketAssign(BaseModel):
+    assigned_to_id: uuid.UUID
+
 # =================
 #  Detailed Responses (with relations)
 # =================

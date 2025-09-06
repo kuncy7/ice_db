@@ -6,7 +6,7 @@ from app.deps import require_role, get_ticket_repo, get_current_user_payload
 from app.repositories.service_ticket import ServiceTicketRepository
 from app.schemas import (ServiceTicketCreate, ServiceTicketUpdate, ServiceTicketResponse,
                            ServiceTicketDetailResponse, TicketCommentCreate, TicketCommentResponse,
-                           PaginatedResponse)
+                           PaginatedResponse, ServiceTicketStatusUpdate, ServiceTicketAssign)
 
 router = APIRouter(prefix="/api/service-tickets", tags=["service-tickets"])
 
@@ -82,3 +82,38 @@ async def add_comment_to_ticket(
     if not comment:
         raise HTTPException(status_code=404, detail="Service ticket not found")
     return comment
+
+@router.put("/{ticket_id}/status", response_model=ServiceTicketResponse)
+async def update_ticket_status(
+    ticket_id: uuid.UUID,
+    payload: ServiceTicketStatusUpdate,
+    repo: ServiceTicketRepository = Depends(get_ticket_repo),
+    user_payload: dict = Depends(require_role("admin", "operator"))
+):
+    user_id = user_payload.get("sub")
+    updated_ticket = await repo.update_status(
+        ticket_id=ticket_id, 
+        user_id=user_id, 
+        new_status=payload.status, 
+        comment_text=payload.comment
+    )
+    if not updated_ticket:
+        raise HTTPException(status_code=404, detail="Service ticket not found")
+    return updated_ticket
+
+@router.put("/{ticket_id}/assign", response_model=ServiceTicketResponse)
+async def assign_ticket_to_user(
+    ticket_id: uuid.UUID,
+    payload: ServiceTicketAssign,
+    repo: ServiceTicketRepository = Depends(get_ticket_repo),
+    user_payload: dict = Depends(require_role("admin", "operator"))
+):
+    assigning_user_id = user_payload.get("sub")
+    assigned_ticket = await repo.assign_ticket(
+        ticket_id=ticket_id, 
+        assigned_to_id=payload.assigned_to_id, 
+        assigning_user_id=assigning_user_id
+    )
+    if not assigned_ticket:
+        raise HTTPException(status_code=404, detail="Service ticket or user to assign not found")
+    return assigned_ticket
