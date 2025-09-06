@@ -1,0 +1,15 @@
+# Środowisko wirtualne
+.venv/
+venv/
+__pycache__/
+
+# Pliki konfiguracyjne środowiska
+.env
+
+# Pliki generowane przez IDE
+.idea/
+.vscode/
+
+# Pliki systemowe
+*.pyc
+.DS_Store

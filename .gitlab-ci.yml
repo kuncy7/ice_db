@@ -1,0 +1,33 @@
+stages:
+  - lint
+  - test
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  key: "${CI_COMMIT_REF_SLUG}"
+  paths:
+    - .cache/pip
+    - .venv
+
+lint:
+  image: python:3.12-slim
+  stage: lint
+  before_script:
+    - python -m venv .venv
+    - . .venv/bin/activate
+    - pip install -r requirements-dev.txt
+  script:
+    - ruff check .
+
+test:
+  image: python:3.12-slim
+  stage: test
+  before_script:
+    - python -m venv .venv
+    - . .venv/bin/activate
+    - pip install -r requirements.txt
+    - pip install -r requirements-dev.txt
+  script:
+    - pytest -q

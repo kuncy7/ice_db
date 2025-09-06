@@ -1,0 +1,16 @@
+[Unit]
+Description=Ice DB API (FastAPI)
+After=network-online.target
+
+[Service]
+User=ice
+Group=ice
+WorkingDirectory=/home/ice/git/ice_db
+Environment="PATH=/home/ice/git/ice_db/.venv/bin"
+EnvironmentFile=/home/ice/git/ice_db/.env
+ExecStart=/home/ice/git/ice_db/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
