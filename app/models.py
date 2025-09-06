@@ -169,3 +169,14 @@ class SystemConfig(Base):
 
     # Relacja do użytkownika, który ostatnio modyfikował wpis
     updated_by = relationship("User", foreign_keys=[updated_by_id])
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True) # To będzie JTI z tokena
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    user = relationship("User")

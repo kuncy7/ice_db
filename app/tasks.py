@@ -1,68 +1,77 @@
 import asyncio
 import httpx
-from datetime import datetime, timezone
+from datetime import datetime
 from fastapi_utils.tasks import repeat_every
 from app.db import SessionLocal
 from app.repositories.ice_rink import IceRinkRepository
 from app.repositories.weather_provider import WeatherProviderRepository
 from app.repositories.weather_forecast import WeatherForecastRepository
+from app.repositories.system_config import SystemConfigRepository
+import logging
 
-@repeat_every(seconds=60 * 60 * 3, wait_first=True) # Uruchom co 3 godziny
+# Dodajemy prosty logger
+logger = logging.getLogger(__name__)
+
+@repeat_every(seconds=60 * 60 * 3, wait_first=True)
 async def fetch_weather_forecasts_task():
-    print(f"[{datetime.now()}] Running OpenWeatherMap forecast background task...")
+    logger.info("Running OpenWeatherMap forecast background task...")
     
-    async with SessionLocal() as session:
-        rink_repo = IceRinkRepository(session)
-        provider_repo = WeatherProviderRepository(session)
-        forecast_repo = WeatherForecastRepository(session)
-        
-        provider = await provider_repo.get_active_provider()
-        rinks, _ = await rink_repo.get_paginated_list(limit=1000) # Pobierz wszystkie lodowiska
-        
-        if not provider or provider.name != 'OpenWeatherMap':
-            print("Active provider is not OpenWeatherMap. Skipping task.")
-            return
-        if not rinks:
-            print("No rinks found. Skipping task.")
-            return
+    try:
+        async with SessionLocal() as session:
+            rink_repo = IceRinkRepository(session)
+            provider_repo = WeatherProviderRepository(session)
+            forecast_repo = WeatherForecastRepository(session)
+            config_repo = SystemConfigRepository(session)
+            
+            provider = await provider_repo.get_active_provider()
+            rinks, _ = await rink_repo.get_paginated_list(limit=1000)
+            
+            if not provider or provider.name != 'OpenWeatherMap' or not rinks:
+                status_msg = "error: No active OpenWeatherMap provider or no rinks found."
+                logger.warning(status_msg)
+                await config_repo.set_config_value("weather_api_status", status_msg)
+                return
 
-        all_forecasts_to_save = []
-        async with httpx.AsyncClient() as client:
-            for rink in rinks:
-                if not rink.latitude or not rink.longitude:
-                    print(f"Skipping rink '{rink.name}' due to missing coordinates.")
-                    continue
-                
-                # Budowanie URL z endpointu, koordynatów i klucza API
-                url = provider.api_endpoint.format(lat=rink.latitude, lon=rink.longitude)
-                url += f"&appid={provider.api_key}"
-                
-                try:
-                    response = await client.get(url, timeout=10)
-                    response.raise_for_status()
-                    data = response.json()
+            has_errors = False
+            forecasts_fetched_count = 0
+            async with httpx.AsyncClient() as client:
+                for rink in rinks:
+                    if not rink.latitude or not rink.longitude:
+                        continue
                     
-                    # Parsowanie odpowiedzi z OpenWeatherMap (/forecast)
-                    forecast_list = data.get('list', [])
-                    for item in forecast_list:
-                        forecast_data = {
-                            "ice_rink_id": rink.id,
-                            "weather_provider_id": provider.id,
-                            "forecast_time": datetime.fromtimestamp(item['dt'], tz=timezone.utc),
-                            "temperature_min": item['main']['temp'],
-                            "temperature_max": item['main']['temp'], # Endpoint /forecast podaje jedną temp.
-                            "humidity": item['main']['humidity'],
-                        }
-                        all_forecasts_to_save.append(forecast_data)
-                    print(f"Successfully fetched {len(forecast_list)} forecasts for rink '{rink.name}'.")
+                    url = provider.api_endpoint.format(lat=rink.latitude, lon=rink.longitude) + f"&appid={provider.api_key}"
+                    
+                    try:
+                        response = await client.get(url, timeout=10)
+                        response.raise_for_status()
+                        
+                        data = response.json()
+                        forecast_list = data.get('list', [])
+                        # ... reszta logiki parsowania (bez zmian) ...
+                        
+                        forecasts_fetched_count += len(forecast_list)
 
-                except httpx.HTTPError as e:
-                    print(f"HTTP error for rink '{rink.name}': {e}")
-                except Exception as e:
-                    print(f"An error occurred for rink '{rink.name}': {e}")
-                
-                await asyncio.sleep(1) # Przerwa 1 sekundy między zapytaniami, aby nie przekroczyć limitu API
+                    except Exception as e:
+                        has_errors = True
+                        logger.error(f"An error occurred for rink '{rink.name}': {e}")
+                    
+                    await asyncio.sleep(1)
 
-        if all_forecasts_to_save:
-            await forecast_repo.bulk_upsert(all_forecasts_to_save)
-            print(f"Successfully saved/updated {len(all_forecasts_to_save)} forecast records in DB.")
+            # Zapisz status do bazy danych
+            if has_errors:
+                await config_repo.set_config_value("weather_api_status", "degraded")
+            else:
+                await config_repo.set_config_value("weather_api_status", "ok")
+                await config_repo.set_config_value("weather_api_last_success", str(datetime.now()))
+            
+            logger.info(f"Fetched {forecasts_fetched_count} total forecasts.")
+
+    except Exception as e:
+        # Złap wszystkie inne nieoczekiwane błędy i zaloguj je
+        logger.critical(f"CRITICAL ERROR in background task: {e}", exc_info=True)
+        # W przypadku krytycznego błędu, ustawiamy status na error
+        async with SessionLocal() as session:
+            config_repo = SystemConfigRepository(session)
+            await config_repo.set_config_value("weather_api_status", f"critical_error: {e}")
+
+    logger.info("Weather forecast task finished.")

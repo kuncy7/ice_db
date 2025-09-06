@@ -1,3 +1,4 @@
+import uuid
 from fastapi import Depends, Header
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from app.repositories.service_ticket import ServiceTicketRepository
 from app.repositories.weather_provider import WeatherProviderRepository
 from app.repositories.weather_forecast import WeatherForecastRepository
 from app.repositories.system_config import SystemConfigRepository
+from app.repositories.user_session import UserSessionRepository
 
 # Zależność dostarczająca sesję bazodanową
 async def get_db_session() -> AsyncSession:
@@ -22,6 +24,9 @@ async def get_db_session() -> AsyncSession:
 # Zależności dostarczające instancje repozytoriów
 def get_user_repo(session: AsyncSession = Depends(get_db_session)) -> UserRepository:
     return UserRepository(session)
+
+def get_session_repo(session: AsyncSession = Depends(get_db_session)) -> UserSessionRepository:
+    return UserSessionRepository(session)
 
 def get_org_repo(session: AsyncSession = Depends(get_db_session)) -> OrganizationRepository:
     return OrganizationRepository(session)
@@ -50,13 +55,26 @@ async def get_bearer_token(authorization: Optional[str] = Header(None)) -> str:
         http_401("Missing or invalid Authorization header")
     return authorization.split(" ", 1)[1].strip()
 
-async def get_current_user_payload(token: str = Depends(get_bearer_token)) -> dict:
+async def get_current_user_payload(
+    token: str = Depends(get_bearer_token),
+    session_repo: UserSessionRepository = Depends(get_session_repo)
+) -> dict:
     try:
         payload = decode_token(token)
     except Exception:
         http_401("Invalid token")
+
     if payload.get("type") != "access":
         http_401("Access token required")
+    
+    jti_str = payload.get("jti")
+    if not jti_str:
+        http_401("Token is missing JTI")
+
+    session = await session_repo.get_session(uuid.UUID(jti_str))
+    if not session or not session.is_active:
+        http_401("Token has been revoked or session is invalid")
+
     return payload
 
 def require_role(*roles: str):

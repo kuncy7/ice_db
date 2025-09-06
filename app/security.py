@@ -1,7 +1,8 @@
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-import jwt  # PyJWT
+import jwt
 from passlib.context import CryptContext
 
 from app.config import get_settings
@@ -18,6 +19,7 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
     except Exception:
         return False
 
+# Zaktualizowana funkcja, która ZAWSZE dodaje JTI
 def _create_token(sub: str, role: str, organization_id: Optional[str], expires_delta: timedelta, token_type: str) -> str:
     now = datetime.now(tz=timezone.utc)
     payload = {
@@ -27,6 +29,7 @@ def _create_token(sub: str, role: str, organization_id: Optional[str], expires_d
         "type": token_type,
         "exp": now + expires_delta,
         "iat": now,
+        "jti": str(uuid.uuid4()) # JTI jest teraz dodawany do każdego tokena
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 

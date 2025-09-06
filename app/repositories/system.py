@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from app.models import IceRink
+from app.models import IceRink, SystemConfig
 
 class SystemRepository:
     def __init__(self, session: AsyncSession):
@@ -19,15 +19,23 @@ class SystemRepository:
         return result.scalar_one()
     
     async def get_full_status(self) -> dict:
-        # Ta funkcja może zostać rozbudowana o odczytywanie statusu
-        # z tabeli system_config, gdy będzie ona używana.
         ssp_connections = await self.get_ssp_connections()
         
+        # Pobieramy dynamicznie statusy z tabeli system_config
+        query = select(SystemConfig).where(SystemConfig.key.in_([
+            'weather_api_status', 'ai_models_status', 'last_backup'
+        ]))
+        result = await self.session.execute(query)
+        configs = {item.key: item.value for item in result.scalars().all()}
+        
+        db_status = "ok" # Wiemy, że jest ok, bo ta funkcja by się nie wykonała
+        system_status = "degraded" if configs.get('weather_api_status', 'unknown') != 'ok' else "ok"
+        
         return {
-            "system_status": "ok",
-            "database_status": "ok",
+            "system_status": system_status,
+            "database_status": db_status,
             "ssp_connections": ssp_connections,
-            "weather_api_status": "unknown", # Placeholder
-            "ai_models_status": "unknown",   # Placeholder
-            "last_backup": None,             # Placeholder
+            "weather_api_status": configs.get('weather_api_status', 'unknown'),
+            "ai_models_status": configs.get('ai_models_status', 'unknown'),
+            "last_backup": configs.get('last_backup'),
         }
