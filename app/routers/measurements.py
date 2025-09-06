@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from app.deps import require_role, get_measurement_repo
 from app.repositories.measurement import MeasurementRepository
 from app.schemas import MeasurementResponse, PaginatedResponse

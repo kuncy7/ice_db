@@ -1,9 +1,9 @@
 # (Nowy plik app/repositories/service_ticket.py)
 
 import uuid
-from typing import List, Tuple, Optional
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from app.repositories.base import BaseRepository
 from app.models import ServiceTicket, TicketComment

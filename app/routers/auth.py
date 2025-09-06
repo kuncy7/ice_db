@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
-from app.deps import get_user_repo, get_current_user_payload, get_bearer_token
+from fastapi import APIRouter, Depends, Body
+from app.deps import get_user_repo, get_bearer_token
 from app.repositories.user import UserRepository
 from app.security import verify_password, create_access_token, create_refresh_token, decode_token
 from app.schemas import LoginRequest, RefreshRequest, TokenResponse, TokenData, UserResponse

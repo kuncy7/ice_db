@@ -23,7 +23,6 @@ class PaginatedResponse(BaseModel, Generic[T]):
 # =================
 
 class OrmBase(BaseModel):
-    # Pozwala Pydantic na tworzenie modeli na podstawie obiektów ORM
     model_config = ConfigDict(from_attributes=True)
 
 # =================
@@ -154,84 +153,6 @@ class MeasurementResponse(MeasurementBase, OrmBase):
     ice_rink_id: uuid.UUID
 
 # =================
-#  Detailed Responses (with relations)
-# =================
-
-class IceRinkDetailResponse(IceRinkResponse):
-    measurements: List[MeasurementResponse] = []
-    # Można dodać też prognozy pogody, gdy będą zaimplementowane
-    # weather_forecasts: List[WeatherForecastResponse] = []
-
-# =================
-#  Authentication
-# =================
-
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-class TokenData(BaseModel):
-    access_token: str
-    refresh_token: str
-    user: UserResponse
-
-class TokenResponse(BaseModel):
-    success: bool = True
-    data: TokenData
-
-# =================
-#  Ticket Comments
-# =================
-
-class TicketCommentBase(BaseModel):
-    comment: str
-    is_internal: bool = False
-
-class TicketCommentCreate(TicketCommentBase):
-    pass
-
-class TicketCommentResponse(TicketCommentBase, OrmBase):
-    id: uuid.UUID
-    user_id: uuid.UUID
-    created_at: datetime
-
-# =================
-#  Service Tickets
-# =================
-
-class ServiceTicketBase(BaseModel):
-    category: str
-    title: str = Field(..., min_length=5, max_length=255)
-    description: str = Field(..., min_length=10)
-    priority: Literal['low', 'medium', 'high', 'critical'] = 'medium'
-
-class ServiceTicketCreate(ServiceTicketBase):
-    ice_rink_id: uuid.UUID
-
-class ServiceTicketUpdate(BaseModel):
-    status: Optional[Literal['new', 'assigned', 'in_progress', 'resolved', 'closed']] = None
-    priority: Optional[Literal['low', 'medium', 'high', 'critical']] = None
-    assigned_to_id: Optional[uuid.UUID] = None
-
-class ServiceTicketResponse(ServiceTicketBase, OrmBase):
-    id: uuid.UUID
-    ticket_number: str
-    ice_rink_id: uuid.UUID
-    organization_id: uuid.UUID
-    created_by_id: uuid.UUID
-    assigned_to_id: Optional[uuid.UUID] = None
-    status: str
-    source: str
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-
-class ServiceTicketDetailResponse(ServiceTicketResponse):
-    comments: List[TicketCommentResponse] = []
-
-# =================
 #  Weather Providers
 # =================
 class WeatherProviderBase(BaseModel):
@@ -264,7 +185,48 @@ class WeatherForecastResponse(OrmBase):
     temperature_min: float
     temperature_max: float
     humidity: Optional[float] = None
-    # ... dodaj inne pola, jeśli są potrzebne
+
+# =================
+#  Service Tickets & Comments
+# =================
+
+class TicketCommentBase(BaseModel):
+    comment: str
+    is_internal: bool = False
+
+class TicketCommentCreate(TicketCommentBase):
+    pass
+
+class TicketCommentResponse(TicketCommentBase, OrmBase):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    created_at: datetime
+
+class ServiceTicketBase(BaseModel):
+    category: str
+    title: str = Field(..., min_length=5, max_length=255)
+    description: str = Field(..., min_length=10)
+    priority: Literal['low', 'medium', 'high', 'critical'] = 'medium'
+
+class ServiceTicketCreate(ServiceTicketBase):
+    ice_rink_id: uuid.UUID
+
+class ServiceTicketUpdate(BaseModel):
+    status: Optional[Literal['new', 'assigned', 'in_progress', 'resolved', 'closed']] = None
+    priority: Optional[Literal['low', 'medium', 'high', 'critical']] = None
+    assigned_to_id: Optional[uuid.UUID] = None
+
+class ServiceTicketResponse(ServiceTicketBase, OrmBase):
+    id: uuid.UUID
+    ticket_number: str
+    ice_rink_id: uuid.UUID
+    organization_id: uuid.UUID
+    created_by_id: uuid.UUID
+    assigned_to_id: Optional[uuid.UUID] = None
+    status: str
+    source: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
 
 # =================
 #  Detailed Responses (with relations)
@@ -272,5 +234,27 @@ class WeatherForecastResponse(OrmBase):
 
 class IceRinkDetailResponse(IceRinkResponse):
     measurements: List[MeasurementResponse] = []
-    # Zaktualizuj tę klasę dodając poniższą linię:
     weather_forecasts: List[WeatherForecastResponse] = []
+
+class ServiceTicketDetailResponse(ServiceTicketResponse):
+    comments: List[TicketCommentResponse] = []
+
+# =================
+#  Authentication
+# =================
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+class TokenData(BaseModel):
+    access_token: str
+    refresh_token: str
+    user: UserResponse
+
+class TokenResponse(BaseModel):
+    success: bool = True
+    data: TokenData

@@ -1,8 +1,8 @@
-from fastapi import Depends, HTTPException, Header
+from fastapi import Depends, Header
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.security import decode_token, verify_password
+from app.security import decode_token
 from app.errors import http_401, http_403
 from app.db import SessionLocal
 from app.repositories.user import UserRepository
