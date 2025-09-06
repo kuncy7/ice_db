@@ -1,4 +1,6 @@
 import uuid
+from datetime import datetime
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -23,3 +25,11 @@ class IceRinkRepository(BaseRepository[IceRink]):
         )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
+
+    async def update_ssp_status(self, rink_id: uuid.UUID, status: str, last_communication: Optional[datetime] = None) -> None:
+        rink = await self.get_by_id(rink_id)
+        if rink:
+            rink.ssp_status = status
+            if last_communication:
+                rink.last_communication = last_communication
+            await self.session.commit()

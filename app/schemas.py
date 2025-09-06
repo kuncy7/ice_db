@@ -279,3 +279,13 @@ class SystemConfigResponse(OrmBase):
     category: str
     updated_at: datetime
     updated_by_id: Optional[uuid.UUID] = None
+
+# =================
+#  SSP Connection Test
+# =================
+class SspTestResponse(BaseModel):
+    status: Literal['connected', 'error', 'not_configured']
+    http_status_code: Optional[int] = None
+    response_time_ms: float
+    last_communication: Optional[datetime] = None
+    error_message: Optional[str] = None

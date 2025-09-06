@@ -1,11 +1,15 @@
 import uuid
+import time
+import httpx
 from typing import List
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
-from app.deps import require_role, get_rink_repo, get_weather_forecast_repo
+from app.deps import require_role, get_rink_repo, get_weather_forecast_repo, get_current_user_payload
 from app.repositories.ice_rink import IceRinkRepository
 from app.repositories.weather_forecast import WeatherForecastRepository
-from app.schemas import (IceRinkCreate, IceRinkUpdate, IceRinkResponse, IceRinkDetailResponse,
-                         PaginatedResponse, WeatherForecastResponse)
+from app.schemas import (IceRinkCreate, IceRinkUpdate, IceRinkResponse,
+                           IceRinkDetailResponse, PaginatedResponse, WeatherForecastResponse,
+                           SspTestResponse)
 
 router = APIRouter(prefix="/api/ice-rinks", tags=["ice-rinks"])
 
@@ -19,12 +23,12 @@ async def list_ice_rinks(
     offset = (page - 1) * limit
     filters = {}
     if user_payload.get("role") == "client":
-        filters["organization_id"] = user_payload.get("organization_id")
+        filters["organization_id"] = uuid.UUID(user_payload.get("organization_id"))
 
     rinks, total = await repo.get_paginated_list(skip=offset, limit=limit, filters=filters)
     return PaginatedResponse(
         page=page, limit=limit, total=total,
-        pages=(total + limit - 1) // limit,
+        pages=(total + limit - 1) // limit if limit > 0 else 0,
         has_next=page * limit < total,
         has_prev=page > 1,
         items=rinks
@@ -49,7 +53,6 @@ async def get_ice_rink(
     if not rink:
         raise HTTPException(status_code=404, detail="Ice rink not found")
     
-    # Sprawdzenie uprawnień dla roli 'client'
     if user_payload.get("role") == "client" and str(rink.organization_id) != user_payload.get("organization_id"):
         raise HTTPException(status_code=403, detail="Forbidden")
         
@@ -74,11 +77,60 @@ async def get_weather_forecasts_for_rink(
     repo: WeatherForecastRepository = Depends(get_weather_forecast_repo),
     _=Depends(require_role("admin", "operator", "client"))
 ):
-    """
-    Retrieves weather forecasts for a specific ice rink for the upcoming days.
-    """
     forecasts = await repo.get_forecasts_for_rink(rink_id=rink_id, days=days)
     if not forecasts:
-        # To nie jest błąd, po prostu może jeszcze nie być prognoz
         return []
     return forecasts
+
+@router.post("/{rink_id}/test-connection", response_model=SspTestResponse)
+async def test_ssp_connection(
+    rink_id: uuid.UUID,
+    repo: IceRinkRepository = Depends(get_rink_repo),
+    _=Depends(require_role("admin", "operator"))
+):
+    rink = await repo.get_by_id(rink_id)
+    if not rink:
+        raise HTTPException(status_code=404, detail="Ice rink not found")
+
+    if not rink.ssp_endpoint:
+        return SspTestResponse(
+            status='not_configured',
+            response_time_ms=0
+        )
+
+    start_time = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.head(rink.ssp_endpoint, follow_redirects=True)
+            except httpx.UnsupportedProtocol:
+                response = await client.get(rink.ssp_endpoint, follow_redirects=True)
+            response.raise_for_status()
+
+        end_time = time.perf_counter()
+        last_comm = datetime.now(timezone.utc)
+        await repo.update_ssp_status(rink_id, 'connected', last_comm)
+
+        return SspTestResponse(
+            status='connected',
+            http_status_code=response.status_code,
+            response_time_ms=round((end_time - start_time) * 1000, 2),
+            last_communication=last_comm
+        )
+    except httpx.RequestError as e:
+        end_time = time.perf_counter()
+        await repo.update_ssp_status(rink_id, 'error')
+        return SspTestResponse(
+            status='error',
+            response_time_ms=round((end_time - start_time) * 1000, 2),
+            error_message=f"Connection error: {type(e).__name__}"
+        )
+    except httpx.HTTPStatusError as e:
+        end_time = time.perf_counter()
+        await repo.update_ssp_status(rink_id, 'error')
+        return SspTestResponse(
+            status='error',
+            http_status_code=e.response.status_code,
+            response_time_ms=round((end_time - start_time) * 1000, 2),
+            error_message=f"HTTP Status Error: {e.response.status_code}"
+        )
