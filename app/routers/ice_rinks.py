@@ -4,7 +4,7 @@ import httpx
 from typing import List
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
-from app.deps import require_role, get_rink_repo, get_weather_forecast_repo, get_current_user_payload
+from app.deps import require_role, get_rink_repo, get_weather_forecast_repo
 from app.repositories.ice_rink import IceRinkRepository
 from app.repositories.weather_forecast import WeatherForecastRepository
 from app.schemas import (IceRinkCreate, IceRinkUpdate, IceRinkResponse,

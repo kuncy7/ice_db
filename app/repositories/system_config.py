@@ -4,7 +4,7 @@ from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.repositories.base import BaseRepository
-from app.models import SystemConfig, User
+from app.models import SystemConfig
 
 class SystemConfigRepository(BaseRepository[SystemConfig]):
     def __init__(self, session: AsyncSession):
