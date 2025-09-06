@@ -7,7 +7,7 @@ sqlalchemy
 asyncpg
 
 # Walidacja i konfiguracja
-pydantic
+pydantic[email]
 python-dotenv
 
 # Bezpieczeństwo
