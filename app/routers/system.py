@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
-import uuid
 
-from app.deps import require_role, get_db_session, get_system_config_repo, get_current_user_payload
+from app.deps import require_role, get_db_session, get_system_config_repo
 from app.repositories.system import SystemRepository
 from app.repositories.system_config import SystemConfigRepository
 from app.schemas import SystemConfigUpdate, SystemConfigResponse
