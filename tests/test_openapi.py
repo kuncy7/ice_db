@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
-from app.main import app
+from app.main import create_app # Zmiana tutaj
 
+app = create_app() # Tworzymy w pełni skonfigurowaną aplikację
 client = TestClient(app)
 
 def test_openapi_loads():
