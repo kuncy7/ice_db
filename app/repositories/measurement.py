@@ -3,6 +3,8 @@ from datetime import datetime
 from typing import List, Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
+from sqlalchemy.dialects.postgresql import insert
 from app.repositories.base import BaseRepository
 from app.models import Measurement
 
@@ -19,7 +21,12 @@ class MeasurementRepository(BaseRepository[Measurement]):
         end_date: Optional[datetime] = None
     ) -> Tuple[List[Measurement], int]:
         
-        query = select(Measurement).where(Measurement.ice_rink_id == rink_id)
+        # Zapytanie teraz dołącza powiązany obiekt IceRink za pomocą selectinload
+        query = (
+            select(Measurement)
+            .where(Measurement.ice_rink_id == rink_id)
+            .options(selectinload(Measurement.ice_rink))
+        )
         if start_date:
             query = query.where(Measurement.timestamp >= start_date)
         if end_date:
@@ -42,3 +49,19 @@ class MeasurementRepository(BaseRepository[Measurement]):
         )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
+    
+    async def bulk_upsert(self, forecasts_data: List[dict]):
+        if not forecasts_data:
+            return
+        
+        stmt = insert(Measurement.metadata.tables['weather_forecasts']).values(forecasts_data)
+        update_stmt = stmt.on_conflict_do_update(
+            index_elements=['ice_rink_id', 'forecast_time'],
+            set_={
+                'temperature_min': stmt.excluded.temperature_min,
+                'temperature_max': stmt.excluded.temperature_max,
+                'humidity': stmt.excluded.humidity,
+            }
+        )
+        await self.session.execute(update_stmt)
+        await self.session.commit()
