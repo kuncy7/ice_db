@@ -1,6 +1,6 @@
 import asyncio
 import httpx
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi_utils.tasks import repeat_every
 from app.db import SessionLocal
 from app.repositories.ice_rink import IceRinkRepository
@@ -9,7 +9,6 @@ from app.repositories.weather_forecast import WeatherForecastRepository
 from app.repositories.system_config import SystemConfigRepository
 import logging
 
-# Dodajemy prosty logger
 logger = logging.getLogger(__name__)
 
 @repeat_every(seconds=60 * 60 * 3, wait_first=True)
@@ -33,7 +32,7 @@ async def fetch_weather_forecasts_task():
                 return
 
             has_errors = False
-            forecasts_fetched_count = 0
+            all_forecasts_to_save = []
             async with httpx.AsyncClient() as client:
                 for rink in rinks:
                     if not rink.latitude or not rink.longitude:
@@ -47,9 +46,17 @@ async def fetch_weather_forecasts_task():
                         
                         data = response.json()
                         forecast_list = data.get('list', [])
-                        # ... reszta logiki parsowania (bez zmian) ...
-                        
-                        forecasts_fetched_count += len(forecast_list)
+                        for item in forecast_list:
+                            forecast_data = {
+                                "ice_rink_id": rink.id,
+                                "weather_provider_id": provider.id,
+                                "forecast_time": datetime.fromtimestamp(item['dt'], tz=timezone.utc),
+                                "temperature_min": item['main']['temp'],
+                                "temperature_max": item['main']['temp'],
+                                "humidity": item['main']['humidity'],
+                            }
+                            all_forecasts_to_save.append(forecast_data)
+                        logger.info(f"Successfully fetched {len(forecast_list)} forecasts for rink '{rink.name}'.")
 
                     except Exception as e:
                         has_errors = True
@@ -57,19 +64,19 @@ async def fetch_weather_forecasts_task():
                     
                     await asyncio.sleep(1)
 
-            # Zapisz status do bazy danych
+            # --- KLUCZOWA POPRAWKA: Przywrócenie zapisu do bazy ---
+            if all_forecasts_to_save:
+                await forecast_repo.bulk_upsert(all_forecasts_to_save)
+                logger.info(f"Successfully saved/updated {len(all_forecasts_to_save)} forecast records in DB.")
+            
             if has_errors:
                 await config_repo.set_config_value("weather_api_status", "degraded")
             else:
                 await config_repo.set_config_value("weather_api_status", "ok")
                 await config_repo.set_config_value("weather_api_last_success", str(datetime.now()))
-            
-            logger.info(f"Fetched {forecasts_fetched_count} total forecasts.")
 
     except Exception as e:
-        # Złap wszystkie inne nieoczekiwane błędy i zaloguj je
         logger.critical(f"CRITICAL ERROR in background task: {e}", exc_info=True)
-        # W przypadku krytycznego błędu, ustawiamy status na error
         async with SessionLocal() as session:
             config_repo = SystemConfigRepository(session)
             await config_repo.set_config_value("weather_api_status", f"critical_error: {e}")
