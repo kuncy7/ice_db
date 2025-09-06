@@ -2,13 +2,13 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 
 # Importy z Twojego projektu
 from app.config import get_settings
-from app.routers import (auth, organizations, users, ice_rinks, system, 
+from app.routers import (auth, organizations, users, ice_rinks, system,
                            measurements, service_tickets, weather)
 from app.tasks import fetch_weather_forecasts_task
-
 
 def create_app() -> FastAPI:
     # --- Definicja cyklu życia aplikacji (Lifespan) ---
@@ -49,6 +49,29 @@ def create_app() -> FastAPI:
     app.include_router(measurements.router)
     app.include_router(service_tickets.router)
     app.include_router(weather.router)
+
+    # --- DODANA SEKCJA - Konfiguracja Swaggera dla autoryzacji JWT ---
+    def custom_openapi():
+        if app.openapi_schema:
+            return app.openapi_schema
+        openapi_schema = get_openapi(
+            title=app.title,
+            version="1.0.0",
+            description="API for ice rinks energy monitoring",
+            routes=app.routes,
+        )
+        openapi_schema.setdefault("components", {}).setdefault("securitySchemes", {})["bearerAuth"] = {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+        }
+        # Aplikuj schemat `bearerAuth` globalnie na wszystkie endpointy
+        openapi_schema["security"] = [{"bearerAuth": []}]
+        app.openapi_schema = openapi_schema
+        return app.openapi_schema
+
+    app.openapi = custom_openapi
+    # --- KONIEC DODANEJ SEKCJI ---
     
     return app
 
