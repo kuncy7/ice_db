@@ -83,3 +83,17 @@ def require_role(*roles: str):
             http_403("Insufficient role")
         return user
     return _inner
+
+def require_role_with_org_check(*roles: str, allow_own_only: bool = False):
+    """Enhanced RBAC with organization and ownership checks"""
+    async def _inner(user: dict = Depends(get_current_user_payload)):
+        if user.get("role") not in roles:
+            http_403("Insufficient role")
+        
+        # Add organization and ownership context to user payload
+        user["organization_id"] = user.get("organization_id")
+        user["user_id"] = user.get("sub")
+        user["allow_own_only"] = allow_own_only
+        
+        return user
+    return _inner

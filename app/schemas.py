@@ -9,6 +9,14 @@ from datetime import datetime
 
 T = TypeVar('T')
 
+class StandardResponse(BaseModel, Generic[T]):
+    success: bool = True
+    data: T
+
+class ErrorResponse(BaseModel):
+    success: bool = False
+    error: Dict[str, Any]
+
 class PaginatedResponse(BaseModel, Generic[T]):
     page: int
     limit: int
@@ -17,6 +25,10 @@ class PaginatedResponse(BaseModel, Generic[T]):
     has_next: bool
     has_prev: bool
     items: List[T]
+
+class StandardPaginatedResponse(BaseModel, Generic[T]):
+    success: bool = True
+    data: PaginatedResponse[T]
 
 # =================
 #  Base & ORM Config
