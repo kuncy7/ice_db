@@ -3,11 +3,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # Importy z Twojego projektu
 from app.config import get_settings
 from app.routers import (auth, organizations, users, ice_rinks, system,
-                           measurements, service_tickets, weather)
+                           measurements, service_tickets, weather, ssp, dashboard)
 from app.tasks import fetch_weather_forecasts_task
 
 def create_app() -> FastAPI:
@@ -30,6 +33,11 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
 
+    # --- Rate Limiting Setup ---
+    limiter = Limiter(key_func=get_remote_address)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
     # --- Konfiguracja Middleware (np. CORS) ---
     origins = [o.strip() for o in settings.cors_origins.split(",")] if settings.cors_origins else ["*"]
     app.add_middleware(
@@ -49,6 +57,8 @@ def create_app() -> FastAPI:
     app.include_router(measurements.router)
     app.include_router(service_tickets.router)
     app.include_router(weather.router)
+    app.include_router(ssp.router)
+    app.include_router(dashboard.router)
 
     # --- DODANA SEKCJA - Konfiguracja Swaggera dla autoryzacji JWT ---
     def custom_openapi():
