@@ -1,6 +1,7 @@
 import uuid
 import io
 import csv
+import json
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -73,7 +74,12 @@ async def export_measurements(
         data_to_export.append(data)
 
     if format == "json":
-        return data_to_export
+        json_output = json.dumps(data_to_export, indent=2, default=str)
+        return StreamingResponse(
+            iter([json_output]),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{rink.name}_measurements.json"'}
+        )
 
     headers = ['ice_rink_name'] + [key for key in data_to_export[0].keys() if key != 'ice_rink_name']
 
